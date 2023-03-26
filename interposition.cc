@@ -8,10 +8,41 @@
 #include <sstream>
 
 
+
 std::map<boost::stacktrace::basic_stacktrace<>, int> stacktrace_counts;
+int call_count = 0;
+
+struct CountResult {
+  int created;
+  int destroyed;
+};
+CountResult current_counts() {
+  CountResult results;
+    results.created = std::accumulate(stacktrace_counts.begin(), stacktrace_counts.end(), 0, [](int a, auto&b) -> int {
+        auto val = b.second;
+        return a + ((val>0)?val:0);
+        });
+    results.destroyed = std::accumulate(stacktrace_counts.begin(), stacktrace_counts.end(), 0, [](int a, auto&b) -> int {
+        auto val = b.second;
+        return a + ((val>0)?0:val);
+        });
+    return results;
+}
+
+
+
 
 #define FUNC_CREATE_MPI_COMM \
-    stacktrace_counts[boost::stacktrace::stacktrace()] += 1;
+    stacktrace_counts[boost::stacktrace::stacktrace()] += 1; \
+    call_count += 1; \
+    int rank; \
+    std::stringstream ss; \
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank); \
+    if((call_count%10) == 0 ) { \
+      auto [created, destroyed] = current_counts(); \
+      ss<<"Current: "<<rank<<" "<<created<<" "<<destroyed<<"\n"; \
+      std::cerr<<ss.str(); \
+    }
   
 #define FUNC_DESTROY_MPI_COMM \
     stacktrace_counts[boost::stacktrace::stacktrace()] -= 1;
@@ -109,14 +140,7 @@ extern "C" {
   }
 
   int MPI_Finalize() {
-    auto total_destroy = std::accumulate(stacktrace_counts.begin(), stacktrace_counts.end(), 0, [](int a, auto&b) -> int {
-        auto val = b.second;
-        return a + ((val>0)?0:val);
-        });
-    auto total_create = std::accumulate(stacktrace_counts.begin(), stacktrace_counts.end(), 0, [](int a, auto&b) -> int {
-        auto val = b.second;
-        return a + ((val>0)?val:0);
-        });
+    auto [total_create, total_destroy] = current_counts();
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     int leaks = total_create+total_destroy;
@@ -128,6 +152,7 @@ extern "C" {
       ss << "Stack Traces\n";
       for(auto& [st,count] : stacktrace_counts) {
         function_counts[st[0].name()] += count;
+        ss <<"Count "<<count<<"\n";
         ss << st;
         ss <<"\n";
       }
